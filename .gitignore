@@ -1,6 +1,16 @@
+# Build folder
 build/
+
+# Binary outputs
 *.bin
 *.elf
 *.map
+
+# Object files
 *.o
 *.obj
+
+# Ninja / CMake junk
+*.ninja*
+CMakeFiles/
+CMakeCache.txt
