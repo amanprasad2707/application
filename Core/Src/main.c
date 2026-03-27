@@ -26,8 +26,16 @@
 #include "app_ota.h"
 #include "stm32f4xx_hal_flash.h"
 #include "stm32f4xx_hal_flash_ex.h"
+#include <string.h>
+#include "flash_operations.h"
+#include <stdio.h>
+#include <stdarg.h>
 
 #define APP_MAGIC       0xABCABC
+
+#define CHUNK_SIZE       128
+#define START_BYTE       0xAA
+#define END_BYTE         0xBB
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +54,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -56,6 +65,7 @@ UART_HandleTypeDef huart2;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -70,6 +80,82 @@ const app_header_t app_header = {
     .crc     = 0xAA70A2B3,
     .version = 0
 };
+
+
+/**
+  * @brief  Print a string to console over UART.
+  * @param  format: Format string as in printf.
+  * @param  ...: Additional arguments providing the data to print.
+  * @retval None
+  */
+void print(char *format,...){
+  char str[80];
+
+  /*Extract the the argument list using VA apis */
+  va_list args;
+  va_start(args, format);
+  vsprintf(str, format,args);
+  HAL_UART_Transmit(&huart2,(uint8_t *)str, strlen(str),HAL_MAX_DELAY);
+  va_end(args);
+}
+
+void ota_receive_and_store(void){
+    uint8_t byte;
+
+    // Step 1: Request OTA from ESP8266
+    HAL_UART_Transmit(&huart1, (uint8_t*)"OTA\n", 4, HAL_MAX_DELAY);
+
+    // 🔹 Step 2: Wait for START byte
+    HAL_UART_Receive(&huart1, &byte, 1, HAL_MAX_DELAY);
+    if (byte != START_BYTE) return;
+
+    // 🔹 Step 3: Receive firmware size
+    uint32_t size = 0;
+    HAL_UART_Receive(&huart1, (uint8_t*)&size, 4, HAL_MAX_DELAY);
+
+    // 🔹 Step 4: Prepare Flash
+    HAL_FLASH_Unlock();
+
+    flash_erase_sector(OTA_START_ADDR);   // must erase full OTA region
+
+    uint32_t flash_addr = OTA_START_ADDR;
+    uint8_t buffer[CHUNK_SIZE];
+
+    uint32_t received = 0;
+
+    // 🔹 Step 5: Receive + Write
+    while (received < size)
+    {
+        uint32_t chunk = (size - received > CHUNK_SIZE) ? CHUNK_SIZE : (size - received);
+
+        HAL_UART_Receive(&huart1, buffer, chunk, HAL_MAX_DELAY);
+
+        for (uint32_t i = 0; i < chunk; i += 4){
+            uint32_t word = 0xFFFFFFFF;
+
+            uint32_t remaining = (chunk - i >= 4) ? 4 : (chunk - i);
+            memcpy(&word, &buffer[i], remaining);
+
+            HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, flash_addr, word);
+            flash_addr += 4;
+        }
+
+        received += chunk;
+    }
+
+    // 🔹 Step 6: Wait for END byte
+    HAL_UART_Receive(&huart1, &byte, 1, HAL_MAX_DELAY);
+    if (byte != END_BYTE)
+    {
+        HAL_FLASH_Lock();
+        return;
+    }
+
+    HAL_FLASH_Lock();
+
+    // 🔹 Step 7: Trigger Bootloader OTA
+    enable_ota_request();
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
     uint32_t wait = 10000;
@@ -111,6 +197,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Transmit(&huart2, (uint8_t *) "Inside application\r\n", 20, 100);
   /* USER CODE END 2 */
@@ -178,6 +265,39 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
 }
 
 /**
