@@ -5,6 +5,8 @@ build/
 *.bin
 *.elf
 *.map
+ota_image.bin
+ota_image.h
 
 # Object files
 *.o

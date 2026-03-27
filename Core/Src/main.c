@@ -66,8 +66,8 @@ static void MX_USART2_UART_Init(void);
 __attribute__((section(".header")))
 const app_header_t app_header = {
     .magic   = APP_MAGIC,
-    .size    = 10560,
-    .crc     = 0x5F3B46AE,
+    .size    = 10568,
+    .crc     = 0xAA70A2B3,
     .version = 0
 };
 
@@ -124,13 +124,13 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
     HAL_GPIO_TogglePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
-    HAL_Delay(50);
+    HAL_Delay(500);
     HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
-    HAL_Delay(50);
+    HAL_Delay(500);
     HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-    HAL_Delay(50);
+    HAL_Delay(500);
     HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
-    HAL_Delay(50);
+    HAL_Delay(500);
   }
   /* USER CODE END 3 */
 }
