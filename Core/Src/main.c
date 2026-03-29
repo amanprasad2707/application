@@ -33,9 +33,12 @@
 
 #define APP_MAGIC       0xABCABC
 
-#define CHUNK_SIZE       128
-#define START_BYTE       0xAA
-#define END_BYTE         0xBB
+#define START_BYTE  0xAA
+#define END_BYTE    0xBB
+#define ACK         0x06
+#define NACK        0x15
+
+#define CHUNK_SIZE  128
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,8 +57,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 
@@ -65,7 +68,7 @@ UART_HandleTypeDef huart2;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_USART1_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -76,11 +79,12 @@ static void MX_USART1_UART_Init(void);
 __attribute__((section(".header")))
 const app_header_t app_header = {
     .magic   = APP_MAGIC,
-    .size    = 10568,
-    .crc     = 0xAA70A2B3,
+    .size    = 16856,
+    .crc     = 0x4777E0DB,
     .version = 0
 };
 
+volatile uint8_t ota_request_pending = 0;
 
 /**
   * @brief  Print a string to console over UART.
@@ -99,52 +103,113 @@ void print(char *format,...){
   va_end(args);
 }
 
-void ota_receive_and_store(void){
-    uint8_t byte;
 
-    // Step 1: Request OTA from ESP8266
-    HAL_UART_Transmit(&huart1, (uint8_t*)"OTA\n", 4, HAL_MAX_DELAY);
+void ota_receive_and_store(void)
+{
+    uint8_t byte = 0;
+
+    // 🔹 Step 0: Prepare Flash
+    HAL_FLASH_Unlock();
+    flash_erase_sector(OTA_START_SECTOR);
+    // print("flash erased\n");
+
+    // 🔹 Step 1: Request OTA
+    uint8_t ota_cmd[] = "OTA\n";
+    HAL_UART_Transmit(&huart3, ota_cmd, sizeof(ota_cmd) - 1, HAL_MAX_DELAY);
 
     // 🔹 Step 2: Wait for START byte
-    HAL_UART_Receive(&huart1, &byte, 1, HAL_MAX_DELAY);
-    if (byte != START_BYTE) return;
+    do {
+        HAL_UART_Receive(&huart3, &byte, 1, HAL_MAX_DELAY);
+    } while (byte != START_BYTE);
+
+    // print("received start byte: %d\n", byte);
 
     // 🔹 Step 3: Receive firmware size
     uint32_t size = 0;
-    HAL_UART_Receive(&huart1, (uint8_t*)&size, 4, HAL_MAX_DELAY);
-
-    // 🔹 Step 4: Prepare Flash
-    HAL_FLASH_Unlock();
-
-    flash_erase_sector(OTA_START_ADDR);   // must erase full OTA region
+    HAL_UART_Receive(&huart3, (uint8_t*)&size, 4, HAL_MAX_DELAY);
+    // print("firmware size: %lu\n", size);
 
     uint32_t flash_addr = OTA_START_ADDR;
     uint8_t buffer[CHUNK_SIZE];
-
     uint32_t received = 0;
 
-    // 🔹 Step 5: Receive + Write
+    // 🔹 Step 4: Receive + Write + ACK loop
     while (received < size)
     {
         uint32_t chunk = (size - received > CHUNK_SIZE) ? CHUNK_SIZE : (size - received);
 
-        HAL_UART_Receive(&huart1, buffer, chunk, HAL_MAX_DELAY);
-
-        for (uint32_t i = 0; i < chunk; i += 4){
-            uint32_t word = 0xFFFFFFFF;
-
-            uint32_t remaining = (chunk - i >= 4) ? 4 : (chunk - i);
-            memcpy(&word, &buffer[i], remaining);
-
-            HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, flash_addr, word);
-            flash_addr += 4;
+        // Receive chunk (blocking, reliable)
+        if (HAL_UART_Receive(&huart3, buffer, chunk, HAL_MAX_DELAY) != HAL_OK)
+        {
+            // Clear any hardware lockup before retrying
+            huart3.ErrorCode = HAL_UART_ERROR_NONE;
+            huart3.RxState = HAL_UART_STATE_READY;
+            
+            uint8_t nack = NACK;
+            HAL_UART_Transmit(&huart3, &nack, 1, HAL_MAX_DELAY);
+            continue; // wait for resend
         }
 
-        received += chunk;
+        // Write chunk to flash (use temp pointer)
+        uint32_t temp_addr = flash_addr;
+        uint8_t success = 1;
+
+        for (uint32_t i = 0; i < chunk; i += 4)
+        {
+            uint32_t word = 0xFFFFFFFF;
+            uint32_t remaining = (chunk - i >= 4) ? 4 : (chunk - i);
+
+            memcpy(&word, &buffer[i], remaining);
+
+            if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, temp_addr, word) != HAL_OK)
+            {
+                success = 0;
+                break;
+            }
+
+            temp_addr += 4;
+        }
+
+        if (success)
+        {
+            flash_addr = temp_addr;
+            received += chunk;
+
+            uint8_t ack = ACK;
+            HAL_UART_Transmit(&huart3, &ack, 1, HAL_MAX_DELAY);
+
+            // print("received %lu / %lu\n", received, size);
+        }
+        else
+        {
+            uint8_t nack = NACK;
+            HAL_UART_Transmit(&huart3, &nack, 1, HAL_MAX_DELAY);
+        }
     }
 
-    // 🔹 Step 6: Wait for END byte
-    HAL_UART_Receive(&huart1, &byte, 1, HAL_MAX_DELAY);
+    // 🔹 Step 5: Wait for END byte
+    // print("waiting for end byte\n");
+
+    // Retry loop in case of overrun errors or stray zero padding bytes
+    uint32_t start_tick = HAL_GetTick();
+    byte = 0;
+    
+    while (HAL_GetTick() - start_tick < 5000)
+    {
+        if (HAL_UART_Receive(&huart3, &byte, 1, 100) == HAL_OK)
+        {
+            if (byte == END_BYTE) break;
+        }
+        else 
+        {
+            // If an Overrun Error occurred, reset the HAL state to unfreeze it
+            huart3.ErrorCode = HAL_UART_ERROR_NONE;
+            huart3.RxState = HAL_UART_STATE_READY;
+        }
+    }
+
+    // print("received end byte: %d\n", byte);
+
     if (byte != END_BYTE)
     {
         HAL_FLASH_Lock();
@@ -153,15 +218,13 @@ void ota_receive_and_store(void){
 
     HAL_FLASH_Lock();
 
-    // 🔹 Step 7: Trigger Bootloader OTA
+    // 🔹 Step 6: Trigger Bootloader
+    print("triggering bootloader\n");
     enable_ota_request();
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-    uint32_t wait = 10000;
-    while (wait--);
-
-    enable_ota_request();
+    ota_request_pending = 1;
 }
 
 /* USER CODE END 0 */
@@ -197,9 +260,9 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_USART1_UART_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  HAL_UART_Transmit(&huart2, (uint8_t *) "Inside application\r\n", 20, 100);
+  print("Application code started..");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -209,15 +272,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    if (ota_request_pending)
+    {
+      ota_request_pending = 0;
+      ota_receive_and_store();
+    }
 
     HAL_GPIO_TogglePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin);
-    HAL_Delay(500);
+    HAL_Delay(1000);
     HAL_GPIO_TogglePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin);
-    HAL_Delay(500);
+    HAL_Delay(1000);
     HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
-    HAL_Delay(500);
+    HAL_Delay(100);
     HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
-    HAL_Delay(500);
+    HAL_Delay(100);
   }
   /* USER CODE END 3 */
 }
@@ -268,39 +336,6 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
-
-/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -334,6 +369,39 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * @brief USART3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -348,6 +416,7 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
