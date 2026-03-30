@@ -1,0 +1,59 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 🔹 Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 🔹 Install ARM toolchain + Ninja
+      - name: Install ARM GCC
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-arm-none-eabi ninja-build
+
+      # 🔹 Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # 🔹 Install Python deps
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt || true
+
+      # 🔹 Configure CMake
+      - name: Configure CMake
+        run: |
+          cmake -B build/Debug -S . \
+          -G Ninja \
+          -DCMAKE_TOOLCHAIN_FILE=cmake/gnu-tools-for-stm32.cmake \
+          -DCMAKE_BUILD_TYPE=Debug
+
+      # 🔹 Build
+      - name: Build
+        run: |
+          cmake --build build/Debug
+
+      # 🔹 Generate OTA image
+      - name: Generate OTA image
+        run: |
+          python app_final.py
+
+      # 🔹 Upload Release
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Firmware Release v1.0.${{ github.run_number }}
+          files: ota_image.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
