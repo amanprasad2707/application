@@ -12,6 +12,8 @@ jobs:
       # 🔹 Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # 🔹 Install ARM toolchain + Ninja
       - name: Install ARM GCC
@@ -35,7 +37,7 @@ jobs:
         run: |
           cmake -B build/Debug -S . \
           -G Ninja \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/gnu-tools-for-stm32.cmake \
+          -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake \
           -DCMAKE_BUILD_TYPE=Debug
 
       # 🔹 Build
