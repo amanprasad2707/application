@@ -286,6 +286,8 @@ int main(void)
     HAL_Delay(200);
     HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
     HAL_Delay(200); */
+
+    printf("app version: 1.0.0\n");
   }
   /* USER CODE END 3 */
 }
