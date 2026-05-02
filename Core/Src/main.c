@@ -122,7 +122,7 @@ void ota_receive_and_store(void)
         HAL_UART_Receive(&huart3, &byte, 1, HAL_MAX_DELAY);
     } while (byte != START_BYTE);
 
-    print("received start byte: %d\n", byte);
+    print("received start byte: %x\n", byte);
 
     // 🔹 Step 3: Receive firmware size
     uint32_t size = 0;
