@@ -111,7 +111,7 @@ void ota_receive_and_store(void)
     // 🔹 Step 0: Prepare Flash
     HAL_FLASH_Unlock();
     flash_erase_sector(OTA_START_SECTOR);
-    // print("flash erased\n");
+    print("OTA section flash erased\n");
 
     // 🔹 Step 1: Request OTA
     uint8_t ota_cmd[] = "OTA\n";
@@ -122,12 +122,12 @@ void ota_receive_and_store(void)
         HAL_UART_Receive(&huart3, &byte, 1, HAL_MAX_DELAY);
     } while (byte != START_BYTE);
 
-    // print("received start byte: %d\n", byte);
+    print("received start byte: %d\n", byte);
 
     // 🔹 Step 3: Receive firmware size
     uint32_t size = 0;
     HAL_UART_Receive(&huart3, (uint8_t*)&size, 4, HAL_MAX_DELAY);
-    // print("firmware size: %lu\n", size);
+    print("firmware size: %lu\n", size);
 
     uint32_t flash_addr = OTA_START_ADDR;
     uint8_t buffer[CHUNK_SIZE];
@@ -188,7 +188,7 @@ void ota_receive_and_store(void)
     }
 
     // 🔹 Step 5: Wait for END byte
-    // print("waiting for end byte\n");
+    print("waiting for end byte\n");
 
     // Retry loop in case of overrun errors or stray zero padding bytes
     uint32_t start_tick = HAL_GetTick();
@@ -208,7 +208,7 @@ void ota_receive_and_store(void)
         }
     }
 
-    // print("received end byte: %d\n", byte);
+    print("received end byte: %d\n", byte);
 
     if (byte != END_BYTE)
     {
@@ -287,7 +287,7 @@ int main(void)
     HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
     HAL_Delay(200);
 
-    print("app version: 1.0.0\n");
+    print("app version: 1.0.11\n");
   }
   /* USER CODE END 3 */
 }
